@@ -17,8 +17,12 @@ class _STTScreenState extends State<STTScreen> {
   late AudioService _audioService;
   bool _isRecording = false;
   bool _isConnected = false;
+  bool _isConnecting = false;
   String? _error;
   final TextEditingController _apiKeyController = TextEditingController();
+
+  StreamSubscription<TranscriptEvent>? _assemblyEventsSubscription;
+  StreamSubscription? _audioStreamSubscription;
 
   // Default API key (users should replace this with their own)
   static const String _defaultApiKey = 'YOUR_ASSEMBLY_AI_API_KEY_HERE';
@@ -29,6 +33,7 @@ class _STTScreenState extends State<STTScreen> {
     _assemblyAIService = AssemblyAIService();
     _audioService = AudioService();
     _apiKeyController.text = _defaultApiKey;
+    _listenToAssemblyEvents();
     _initializeAudioService();
   }
 
@@ -43,6 +48,7 @@ class _STTScreenState extends State<STTScreen> {
   @override
   void dispose() {
     _audioStreamSubscription?.cancel();
+    _assemblyEventsSubscription?.cancel();
     _assemblyAIService.dispose();
     _audioService.dispose();
     _apiKeyController.dispose();
@@ -62,13 +68,13 @@ class _STTScreenState extends State<STTScreen> {
     try {
       setState(() {
         _error = null;
+        _isConnecting = true;
+        _isConnected = false;
       });
       
       await _assemblyAIService.connect(apiKey);
       
-      setState(() {
-        _isConnected = true;
-      });
+      // Connection status will flip to connected when Session Begin event arrives.
     } catch (e) {
       String errorMessage = 'Failed to connect to AssemblyAI';
       
@@ -86,6 +92,7 @@ class _STTScreenState extends State<STTScreen> {
       setState(() {
         _error = errorMessage;
         _isConnected = false;
+        _isConnecting = false;
       });
     }
   }
@@ -94,6 +101,7 @@ class _STTScreenState extends State<STTScreen> {
     await _assemblyAIService.disconnect();
     setState(() {
       _isConnected = false;
+      _isConnecting = false;
     });
   }
 
@@ -130,8 +138,6 @@ class _STTScreenState extends State<STTScreen> {
       });
     }
   }
-
-  StreamSubscription? _audioStreamSubscription;
 
   void _startRealAudioStreaming() {
     if (_audioService.audioDataStream != null) {
@@ -175,9 +181,17 @@ class _STTScreenState extends State<STTScreen> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
-            icon: Icon(_isConnected ? Icons.cloud_done : Icons.cloud_off),
-            onPressed: _isConnected ? _disconnectFromAssemblyAI : _showApiKeyDialog,
-            tooltip: _isConnected ? 'Disconnect' : 'Connect to AssemblyAI',
+            icon: Icon(
+              _isConnected
+                  ? Icons.cloud_done
+                  : (_isConnecting ? Icons.cloud_sync : Icons.cloud_off),
+            ),
+            onPressed: _isConnecting
+                ? null
+                : (_isConnected ? _disconnectFromAssemblyAI : _showApiKeyDialog),
+            tooltip: _isConnected
+                ? 'Disconnect'
+                : (_isConnecting ? 'Connecting...' : 'Connect to AssemblyAI'),
           ),
         ],
       ),
@@ -187,20 +201,30 @@ class _STTScreenState extends State<STTScreen> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16.0),
-            color: _isConnected ? Colors.green[50] : Colors.orange[50],
+            color: _isConnected
+                ? Colors.green[50]
+                : (_isConnecting ? Colors.blue[50] : Colors.orange[50]),
             child: Row(
               children: [
                 Icon(
-                  _isConnected ? Icons.check_circle : Icons.warning,
-                  color: _isConnected ? Colors.green : Colors.orange,
+                  _isConnected
+                      ? Icons.check_circle
+                      : (_isConnecting ? Icons.sync : Icons.warning),
+                  color: _isConnected
+                      ? Colors.green
+                      : (_isConnecting ? Colors.blue : Colors.orange),
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  _isConnected 
-                    ? 'Connected to AssemblyAI'
-                    : 'Not connected - Tap to configure API key',
+                  _isConnected
+                      ? 'Connected to AssemblyAI'
+                      : (_isConnecting
+                          ? 'Connecting to AssemblyAI...'
+                          : 'Not connected - Tap to configure API key'),
                   style: TextStyle(
-                    color: _isConnected ? Colors.green[800] : Colors.orange[800],
+                    color: _isConnected
+                        ? Colors.green[800]
+                        : (_isConnecting ? Colors.blue[800] : Colors.orange[800]),
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -329,16 +353,9 @@ class _STTScreenState extends State<STTScreen> {
 
           // Transcript Display
           Expanded(
-            child: _assemblyAIService.transcriptStream != null
-                ? TranscriptDisplay(
-                    transcriptStream: _assemblyAIService.transcriptStream!,
-                  )
-                : const Center(
-                    child: Text(
-                      'Connect to AssemblyAI to see transcripts',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
+            child: TranscriptDisplay(
+              transcriptStream: _assemblyAIService.transcriptStream,
+            ),
           ),
         ],
       ),
@@ -391,5 +408,44 @@ class _STTScreenState extends State<STTScreen> {
         ],
       ),
     );
+  }
+
+  void _listenToAssemblyEvents() {
+    _assemblyEventsSubscription?.cancel();
+    _assemblyEventsSubscription = _assemblyAIService.events.listen((event) {
+      if (!mounted) return;
+
+      if (event.status == 'begin') {
+        setState(() {
+          _isConnected = true;
+          _isConnecting = false;
+          _error = null;
+        });
+        return;
+      }
+
+      if (event.status == 'termination') {
+        setState(() {
+          _isConnected = false;
+          _isConnecting = false;
+        });
+      }
+
+      if (event.disconnect != null) {
+        setState(() {
+          _isConnected = false;
+          _isConnecting = false;
+          _error ??= event.disconnect!.message;
+        });
+      }
+
+      if (event.error != null) {
+        setState(() {
+          _error = event.error!.message;
+          _isConnected = false;
+          _isConnecting = false;
+        });
+      }
+    });
   }
 }

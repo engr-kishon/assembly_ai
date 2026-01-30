@@ -9,7 +9,8 @@ class AssemblyAIService {
   static const int _sampleRate = 16000;
 
   WebSocketChannel? _channel;
-  StreamController<TranscriptEvent>? _events;
+  final StreamController<TranscriptEvent> _events =
+      StreamController<TranscriptEvent>.broadcast();
 
   bool _isConnected = false;
 
@@ -21,16 +22,14 @@ class AssemblyAIService {
   // Target chunk size: 100ms at 16kHz = 1600 samples * 2 bytes = 3200 bytes
   int get _targetChunkBytes => (_sampleRate / 10).round() * 2;
 
-  Stream<TranscriptEvent>? get events => _events?.stream;
+  Stream<TranscriptEvent> get events => _events.stream;
 
-  Stream<TranscriptResponse>? get transcriptStream => _events?.stream
+  Stream<TranscriptResponse> get transcriptStream => _events.stream
       .where((event) => event.transcript != null)
       .map((event) => event.transcript!);
   bool get isConnected => _isConnected;
 
   Future<void> connect(String apiKey) async {
-    _events = StreamController<TranscriptEvent>.broadcast();
-
     final uri = Uri.parse(
       '$_baseUrl'
           '?token=$apiKey'
@@ -147,7 +146,7 @@ class AssemblyAIService {
 
       if (type == 'Begin') {
         print('🎬 AssemblyAI: Session Begin');
-        _events?.add(TranscriptEvent.status('begin'));
+        _emitEvent(TranscriptEvent.status('begin'));
         return;
       }
 
@@ -156,7 +155,7 @@ class AssemblyAIService {
         final endOfTurn = (data['end_of_turn'] ?? false) as bool;
 
         if (transcript.isNotEmpty) {
-          _events?.add(TranscriptEvent.transcript(
+          _emitEvent(TranscriptEvent.transcript(
             TranscriptResponse.fromV3Json(data),
           ));
         }
@@ -168,7 +167,7 @@ class AssemblyAIService {
 
       if (type == 'Termination') {
         print('🔚 AssemblyAI: Server Termination');
-        _events?.add(TranscriptEvent.status('termination'));
+        _emitEvent(TranscriptEvent.status('termination'));
         return;
       }
 
@@ -218,7 +217,7 @@ class AssemblyAIService {
     print('🔌 AssemblyAI: Disconnected after ${seconds}s');
 
     // Publish a disconnect event (useful for UI)
-    _events?.add(TranscriptEvent.disconnected(
+    _emitEvent(TranscriptEvent.disconnected(
       durationSeconds: seconds,
       message: seconds < 5
           ? 'Disconnected quickly — check API key / query params / audio format.'
@@ -249,14 +248,12 @@ class AssemblyAIService {
     _isConnected = false;
     _connectionStartTime = null;
 
-    await _events?.close();
-    _events = null;
-
     print('✅ AssemblyAI: Disconnected cleanly');
   }
 
   void dispose() {
     disconnect();
+    _events.close();
   }
 
   // ---------- Helpers ----------
@@ -266,11 +263,16 @@ class AssemblyAIService {
     required String message,
     required String raw,
   }) {
-    _events?.add(TranscriptEvent.error(
+    _emitEvent(TranscriptEvent.error(
       code: code?.toString(),
       message: message,
       raw: raw,
     ));
+  }
+
+  void _emitEvent(TranscriptEvent event) {
+    if (_events.isClosed) return;
+    _events.add(event);
   }
 
   /// Attempts to extract a close code like "3005" from error strings.
