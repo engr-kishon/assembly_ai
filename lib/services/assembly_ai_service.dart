@@ -35,10 +35,6 @@ class AssemblyAIService {
           '?token=$apiKey'
           '&sample_rate=$_sampleRate'
           '&encoding=pcm_s16le'
-          '&format_turns=false'
-          '&format_text=true'
-          '&punctuate=true'
-          '&inactivity_timeout=60'
           '&speech_model=universal-streaming-multilingual'
           '&language_detection=true',
     );
